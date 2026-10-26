@@ -61,7 +61,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 </head>
 <body>
 <header>
-<div class="version-tag">版本：2026-10-26 13:06（北京时间）</div>
+<div class="version-tag">版本：2026-10-26 15:50（北京时间）</div>
 <h1>周期任务与收益管理</h1>
 <p>第二版 · 自动计算未来24小时待办</p>
 </header>
@@ -98,7 +98,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 <div class="field"><label>事项名称 *</label><input id="name" required maxlength="120" placeholder="例如：每日签到"></div>
 <div class="field"><label>所属平台</label><input id="platform" placeholder="例如：平台A"></div>
 <div class="field"><label>分类</label><select id="category"><option>收益任务</option><option>签到</option><option>限时活动</option><option>投资/理财</option><option>工作/生活</option><option>其他</option></select></div>
-<div class="field"><label>执行频次 *</label><select id="freq"><option value="once">仅一次</option><option value="daily">每天</option><option value="weekly">每周</option><option value="monthly">每月</option><option value="yearly">每年</option><option value="interval">自定义间隔</option></select></div>
+<div class="field"><label>执行频次 *</label><select id="freq"><option value="once">仅一次</option><option value="daily">每天</option><option value="weekly">每周</option><option value="monthly">每月</option><option value="yearly">每年（固定月日）</option><option value="solar">节气周期（二十四节气）</option><option value="interval">自定义间隔</option></select></div>
 <div class="field"><label>生效日期 *</label><input type="date" id="start" required></div>
 <div class="field"><label>结束日期（可选）</label><input type="date" id="end"></div>
 <div class="field"><label>执行时间</label><input type="time" id="time" value="09:00"></div>
@@ -110,6 +110,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 <div class="field" id="unitBox"><label>间隔单位</label><select id="unit"><option value="day">天</option><option value="week">周</option></select></div>
 <div class="field" id="yearMonthBox"><label>每年月份</label><select id="yearMonth"></select></div>
 <div class="field" id="yearDayBox"><label>每年日期</label><input type="number" id="yearDay" min="1" max="31" value="1"></div>
+<div class="field full hidden" id="solarTermsBox"><label>选择节气（可多选）</label><div class="actions"><button type="button" class="small secondary" id="solarSelectAll">全选24个</button><button type="button" class="small secondary" id="solarClearAll">清空选择</button></div><div id="solarTermsChoices" class="grid"></div><div class="help">每年按节气实际日期生成任务；日期按北京时间确定。至少选择一个节气。</div></div>
 <div class="field"><label>预期单次收益</label><input type="number" id="amount" min="0" step="0.01" value="0"></div>
 <div class="field"><label>收益单位</label><select id="currency"><option value="CNY">人民币（¥）</option><option value="points">积分</option><option value="USD">美元（$）</option><option value="other">其他</option></select></div>
 <div class="field"><label>优先级</label><select id="priority"><option>中</option><option>高</option><option>低</option></select></div>
@@ -384,6 +385,49 @@ function load(){
   });
 }
 
+/* ========== 二十四节气日期计算（太阳视黄经） ========== */
+var SOLAR_TERMS = [
+  {name:'小寒',angle:285},{name:'大寒',angle:300},{name:'立春',angle:315},{name:'雨水',angle:330},
+  {name:'惊蛰',angle:345},{name:'春分',angle:0},{name:'清明',angle:15},{name:'谷雨',angle:30},
+  {name:'立夏',angle:45},{name:'小满',angle:60},{name:'芒种',angle:75},{name:'夏至',angle:90},
+  {name:'小暑',angle:105},{name:'大暑',angle:120},{name:'立秋',angle:135},{name:'处暑',angle:150},
+  {name:'白露',angle:165},{name:'秋分',angle:180},{name:'寒露',angle:195},{name:'霜降',angle:210},
+  {name:'立冬',angle:225},{name:'小雪',angle:240},{name:'大雪',angle:255},{name:'冬至',angle:270}
+];
+function normAngle(a){ return ((a%360)+360)%360; }
+function fmtBeijingDate(ms){ var d=new Date(ms+8*3600000); return d.getUTCFullYear()+'-'+pad(d.getUTCMonth()+1)+'-'+pad(d.getUTCDate()); }
+function sunApparentLongitude(ms){
+  var jd=ms/86400000+2440587.5, T=(jd-2451545.0)/36525;
+  var L0=normAngle(280.46646+T*(36000.76983+0.0003032*T));
+  var M=normAngle(357.52911+T*(35999.05029-0.0001537*T))*Math.PI/180;
+  var e=0.016708634-T*(0.000042037+0.0000001267*T);
+  var C=(1.914602-T*(0.004817+0.000014*T))*Math.sin(M)+(0.019993-0.000101*T)*Math.sin(2*M)+0.000289*Math.sin(3*M);
+  var omega=(125.04-1934.136*T)*Math.PI/180;
+  return normAngle(L0+C-0.00569-0.00478*Math.sin(omega));
+}
+function solarTermDate(year, termAngle){
+  var start=Date.UTC(year,0,1), finish=Date.UTC(year+1,0,1), step=3*3600000;
+  var prevT=start, prevL=sunApparentLongitude(prevT), cumulative=0;
+  var initialL=prevL, target=termAngle;
+  while(target<=initialL) target+=360;
+  var targetProgress=target-initialL;
+  for(var t=start+step;t<=finish;t+=step){
+    var lon=sunApparentLongitude(t), delta=normAngle(lon-prevL);
+    if(delta>0 && delta<2 && cumulative < targetProgress && cumulative+delta >= targetProgress){
+      var wanted=targetProgress-cumulative;
+      var lo=prevT, hi=t;
+      for(var i=0;i<32;i++){
+        var mid=(lo+hi)/2, dm=normAngle(sunApparentLongitude(mid)-prevL);
+        if(dm<wanted) lo=mid; else hi=mid;
+      }
+      var crossing=new Date((lo+hi)/2);
+      return fmtBeijingDate(crossing.getTime());
+    }
+    cumulative += delta; prevT=t; prevL=lon;
+  }
+  return null;
+}
+
 /* ========== 周期日期计算 ========== */
 function dueDates(r, from, to){
   var results = [];
@@ -395,6 +439,24 @@ function dueDates(r, from, to){
     var planned = new Date(dateStr + 'T' + (r.time||'09:00') + ':00');
     var deadline = new Date(dateStr + 'T' + deadlineTime + ':00');
     return { date: dateStr, planned: planned, deadline: deadline };
+  }
+
+  if(r.frequency === 'solar'){
+    var selected = Array.isArray(r.solarTerms) ? r.solarTerms : [];
+    var firstYear = Math.max(start.getFullYear(), from.getFullYear());
+    var lastYear = to.getFullYear();
+    for(var sy=firstYear; sy<=lastYear; sy++){
+      SOLAR_TERMS.forEach(function(term){
+        if(selected.indexOf(term.name)<0) return;
+        var dateStr=solarTermDate(sy,term.angle);
+        if(!dateStr) return;
+        var day=sod(new Date(dateStr+'T00:00:00'));
+        if(day < sod(start) || day < sod(from) || day > to || (end && day > end)) return;
+        results.push(makeEntry(dateStr));
+      });
+    }
+    results.sort(function(a,b){return a.date.localeCompare(b.date);});
+    return results;
   }
 
   if(r.frequency === 'once'){
@@ -487,7 +549,9 @@ function generate(){
   var to = plusDays(sod(now), 45);
   var changed = false;
   db.rules.filter(function(r){ return r.active; }).forEach(function(r){
-    dueDates(r, from, to).forEach(function(x){
+    // 节气规则按生效日期补齐历史发生项，避免网页长时间未打开时漏掉节气任务。
+    var ruleFrom = r.frequency==='solar' ? new Date(r.startDate+'T00:00:00') : from;
+    dueDates(r, ruleFrom, to).forEach(function(x){
       var id = r.id + '_' + x.date;
       var exists = db.records.some(function(z){ return z.id === id; });
       if(!exists){
@@ -585,7 +649,7 @@ function renderRules(){
   var arr = db.rules.filter(function(r){
     return (!q || (r.name+' '+(r.platform||'')).toLowerCase().indexOf(q)>=0) && (f==='all' || String(r.active)===f);
   });
-  var freqNames = {once:'仅一次', daily:'每天', weekly:'每周', monthly:'每月', yearly:'每年', interval:'自定义间隔'};
+  var freqNames = {once:'仅一次', daily:'每天', weekly:'每周', monthly:'每月', yearly:'每年', solar:'节气周期', interval:'自定义间隔'};
   $('ruleList').innerHTML = arr.length ? arr.map(function(r){
     return '<div class="item"><div class="itemtop"><div class="title">'+esc(r.name)+'<br>'
       + badge(r.platform||'未填写平台') + badge(freqNames[r.frequency]||r.frequency)
@@ -593,6 +657,7 @@ function renderRules(){
       + '</div><b>'+esc(money(r.amount, r.currency))+'</b></div>'
       + '<p><b>开始：</b>'+esc(r.startDate) + (r.endDate?'　<b>结束：</b>'+esc(r.endDate):'')
       + '<br><b>时间：</b>'+esc(r.time||'')+'　<b>截止：</b>'+esc(r.deadline||'')
+      + (r.frequency==='solar' ? '<br><b>节气：</b>'+esc((r.solarTerms||[]).join('、')||'未选择') : '')
       + (r.path?'<br><b>路径：</b>'+esc(r.path):'')
       + (r.notes?'<br><b>备注：</b>'+esc(r.notes):'') + '</p>'
       + '<div class="actions">'
@@ -730,6 +795,7 @@ function showFields(){
   $('unitBox').classList.toggle('hidden', f!=='interval');
   $('yearMonthBox').classList.toggle('hidden', f!=='yearly');
   $('yearDayBox').classList.toggle('hidden', f!=='yearly');
+  $('solarTermsBox').classList.toggle('hidden', f!=='solar');
 }
 
 /* ========== 表单：重置 ========== */
@@ -754,6 +820,7 @@ function formRule(){
     platform: $('platform').value.trim(),
     category: $('category').value,
     frequency: $('freq').value,
+    solarTerms: Array.prototype.filter.call(document.querySelectorAll('input[name=solarTerm]:checked'), function(){return true;}).map(function(el){return el.value;}),
     startDate: $('start').value,
     endDate: $('end').value || '',
     time: $('time').value || '09:00',
@@ -796,6 +863,7 @@ function editRule(id){
   Array.prototype.forEach.call($('weekdays').options, function(o){
     o.selected = (r.weekdays||[]).indexOf(+o.value) >= 0;
   });
+  Array.prototype.forEach.call(document.querySelectorAll('input[name=solarTerm]'), function(o){o.checked=(r.solarTerms||[]).indexOf(o.value)>=0;});
   $('active').value = r.active ? 'true' : 'false';
   $('formTitle').textContent = '编辑周期规则';
   showFields();
@@ -843,7 +911,7 @@ function download(name, txt, type){
   setTimeout(function(){ URL.revokeObjectURL(u); }, 1200);
 }
 
-var ruleFields = ['name','platform','category','frequency','startDate','endDate','time','deadline','weekdays','monthdays','intervalN','unit','yearMonth','yearDay','amount','currency','priority','active','path','notes'];
+var ruleFields = ['name','platform','category','frequency','startDate','endDate','time','deadline','weekdays','monthdays','intervalN','unit','yearMonth','yearDay','solarTerms','amount','currency','priority','active','path','notes'];
 var histFields = ['name','platform','category','date','plannedAt','deadlineAt','expected','currency','status','actual','received','completedAt','feedback','path','notes','priority','ruleId'];
 
 function cell(x){
@@ -885,6 +953,9 @@ function bindEvents(){
     };
   });
 
+  $('solarTermsChoices').innerHTML = SOLAR_TERMS.map(function(t){return '<label class="field" style="display:flex;align-items:center;gap:8px"><input type="checkbox" name="solarTerm" value="'+t.name+'" style="width:auto"> '+t.name+'</label>';}).join('');
+  $('solarSelectAll').onclick=function(){Array.prototype.forEach.call(document.querySelectorAll('input[name=solarTerm]'),function(el){el.checked=true;});};
+  $('solarClearAll').onclick=function(){Array.prototype.forEach.call(document.querySelectorAll('input[name=solarTerm]'),function(el){el.checked=false;});};
   $('freq').onchange = showFields;
   $('surgeForm').onsubmit = createSurgeTask;
   $('resetBtn').onclick = reset;
@@ -894,6 +965,7 @@ function bindEvents(){
     e.preventDefault();
     var r = formRule();
     if(!r.name || !r.startDate){ alert('请填写事项名称和生效日期'); return; }
+    if(r.frequency==='solar' && !r.solarTerms.length){ alert('节气周期至少选择一个节气'); return; }
     if(r.endDate && r.endDate < r.startDate){ alert('结束日期不能早于开始日期'); return; }
     var old = db.rules.find(function(x){ return x.id===r.id; });
     if(old){ r.createdAt=old.createdAt||r.createdAt; db.rules = db.rules.map(function(x){ return x.id===r.id ? r : x; }); syncPendingRecords(r); }
@@ -961,7 +1033,7 @@ function bindEvents(){
   };
   $('template').onclick = function(){
     download('周期规则导入模板.csv',
-      csv([ruleFields, ['每日签到','平台A','签到','daily',todayStr(),'','09:00','23:59','','','1','day','1','1','0','CNY','中','true','首页 → 签到','每天只能签到一次']]),
+      csv([ruleFields, ['每日签到','平台A','签到','daily',todayStr(),'','09:00','23:59','','','1','day','1','1','','0','CNY','中','true','首页 → 签到','每天只能签到一次']]),
       'text/csv;charset=utf-8');
   };
 
@@ -1008,7 +1080,8 @@ function bindEvents(){
             if(!o.startDate) return alert('存在缺少startDate的行，请修正CSV后重试');
             db.rules.push({
               id: uid(), name: o.name, platform: o.platform||'', category: o.category||'其他',
-              frequency: ['once','daily','weekly','monthly','yearly','interval'].indexOf(o.frequency)>=0 ? o.frequency : 'daily',
+              frequency: ['once','daily','weekly','monthly','yearly','solar','interval'].indexOf(o.frequency)>=0 ? o.frequency : 'daily',
+              solarTerms: (o.solarTerms||'').split(/[;|，,]/).map(function(v){return v.trim();}).filter(function(v){return SOLAR_TERMS.some(function(t){return t.name===v;});}),
               startDate: o.startDate, endDate: o.endDate||'',
               time: o.time||'09:00', deadline: o.deadline||'23:59',
               weekdays: (o.weekdays||'').split(/[;|]/).map(Number).filter(function(n){return n>=0&&n<=6;}),

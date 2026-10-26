@@ -61,7 +61,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 </head>
 <body>
 <header>
-<div class="version-tag">版本：2026-10-26 10:30（北京时间）</div>
+<div class="version-tag">版本：2026-10-26 13:06（北京时间）</div>
 <h1>周期任务与收益管理</h1>
 <p>第二版 · 自动计算未来24小时待办</p>
 </header>
@@ -550,9 +550,17 @@ function renderToday(){
   if(generate()) save();
   var now = new Date();
   var end = new Date(now.getTime() + 86400000);
+  // 待办分类以截止时间为准：截止时间已过才算逾期。
+  // 计划时间已过但截止时间尚未到的任务仍显示在待办，避免任务卡片在计划时间后、截止时间前消失。
   var up = db.records.filter(function(r){
-    return r.status==='pending' && new Date(r.plannedAt) >= now && new Date(r.plannedAt) < end;
-  }).sort(function(a,b){ return a.plannedAt.localeCompare(b.plannedAt); });
+    if(r.status !== 'pending') return false;
+    var planned = new Date(r.plannedAt);
+    var deadline = new Date(r.deadlineAt);
+    return deadline >= now && planned < end;
+  }).sort(function(a,b){
+    var ap = new Date(a.plannedAt).getTime(), bp = new Date(b.plannedAt).getTime();
+    return ap - bp;
+  });
   var late = db.records.filter(function(r){
     return r.status==='pending' && new Date(r.deadlineAt) < now;
   }).sort(function(a,b){ return a.deadlineAt.localeCompare(b.deadlineAt); });

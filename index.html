@@ -61,7 +61,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 </head>
 <body>
 <header>
-<div class="version-tag">版本：2026-10-26 09:54（北京时间）</div>
+<div class="version-tag">版本：2026-10-26 10:30（北京时间）</div>
 <h1>周期任务与收益管理</h1>
 <p>第二版 · 自动计算未来24小时待办</p>
 </header>
@@ -85,7 +85,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 <div class="stat"><span>今日已完成</span><strong id="doneN">0</strong></div>
 <div class="stat"><span>本月实际收益</span><strong id="monthSum">¥0.00</strong></div>
 </div>
-<div class="card"><h2>未来24小时待办</h2><p class="muted">按周期规则自动生成；刷新不会重复生成同一天同一任务。</p><div id="upList"></div></div>
+<div class="card"><h2>未来24小时待办</h2><p class="muted">包含未来24小时内的周期待办，以及所有尚未结束/归档的冲量任务。冲量目标达标不会自动结束任务。</p><div id="upList"></div></div>
 <div class="card"><h2>已逾期事项</h2><div id="lateList"></div></div>
 </section>
 
@@ -138,6 +138,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 <div class="field"><label>任务名称 *</label><input id="surgeName" required maxlength="120" placeholder="例如：月消费冲量 - 主账户"></div>
 <div class="field"><label>平台（多个用逗号分隔）</label><input id="surgePlatforms" placeholder="平台A,平台B"></div>
 <div class="field"><label>目标金额（可选，人民币）</label><input id="surgeTarget" type="number" min="0.01" step="0.01" placeholder="例如：1000000"></div>
+<div class="field"><label>预期收益（可选，人民币）</label><input id="surgeExpected" type="number" step="0.01" placeholder="预计任务收益"></div>
 <div class="field"><label>最优完成时间（可选）</label><input id="surgeBestDate" type="datetime-local"></div>
 <div class="field"><label>Deadline（可选）</label><input id="surgeDeadline" type="datetime-local"></div>
 <div class="field full"><label>备注（可选）</label><textarea id="surgeNotes" placeholder="任务说明、消费口径等"></textarea></div>
@@ -557,13 +558,16 @@ function renderToday(){
   }).sort(function(a,b){ return a.deadlineAt.localeCompare(b.deadlineAt); });
 
   $('upN').textContent = up.length;
-  $('upSum').textContent = money(up.filter(function(r){return r.currency==='CNY';}).reduce(function(s,r){return s+(+r.expected||0);},0), 'CNY');
+  var activeSurges=(db.surgeTasks||[]).filter(function(t){return !t.archivedAt && t.status!=='finished';});
+  $('upSum').textContent = money(up.filter(function(r){return r.currency==='CNY';}).reduce(function(s,r){return s+(+r.expected||0);},0)+activeSurges.reduce(function(s,t){return s+(t.expected==null?0:(+t.expected||0));},0), 'CNY');
   $('doneN').textContent = db.records.filter(function(r){return r.status==='done' && r.date===todayStr();}).length;
   $('monthSum').textContent = money(db.records.filter(function(r){
     return r.status==='done' && r.date.startsWith(todayStr().slice(0,7)) && r.currency==='CNY';
   }).reduce(function(s,r){return s+(+r.actual||0);},0), 'CNY');
 
-  $('upList').innerHTML = up.length ? up.map(recordCard).join('') : '<div class="empty">未来24小时没有待办。请到「周期规则」新增任务。</div>';
+  var surgeDue=(db.surgeTasks||[]).filter(function(t){return !t.archivedAt && t.status!=='finished';});
+  var surgeHtml=surgeDue.map(function(t){var es=(db.surgeEntries||[]).filter(function(e){return e.taskId===t.id;});var total=es.reduce(function(sum,e){return sum+(+e.amount||0);},0);var target=t.target==null?null:+t.target;return '<div class="item"><div class="itemtop"><div class="title">'+esc(t.name)+'<br>'+((t.platforms||[]).map(function(x){return badge(x);}).join(' '))+badge('冲量任务','amber')+(target!==null&&total>=target?badge('目标已达标','green'):'')+'</div><b>'+(target!==null?esc(money(total,'CNY'))+' / '+esc(money(target,'CNY')):'累计 '+esc(money(total,'CNY')) )+'</b></div><p><b>预期收益：</b>'+esc(t.expected==null?'未填写':money(t.expected,'CNY'))+(t.bestDate?'<br><b>最优完成时间：</b>'+esc(t.bestDate):'')+(t.deadline?'<br><b>Deadline：</b>'+esc(t.deadline):'')+'</p><div class="actions"><button class="small primary" data-act="goSurge" data-id="'+esc(t.id)+'">登记/查看冲量</button><button class="small success" data-act="finishSurge" data-id="'+esc(t.id)+'">结束任务并登记收益</button></div></div>';}).join('');
+  $('upList').innerHTML = (up.length?up.map(recordCard).join(''):'')+surgeHtml || '<div class="empty">未来24小时没有待办，也没有进行中的冲量任务。</div>'; 
   $('lateList').innerHTML = late.length ? late.map(recordCard).join('') : '<div class="empty">目前没有逾期待处理事项。</div>';
 }
 
@@ -614,6 +618,8 @@ function renderStats(){
   $('sDone').textContent = d.length;
   $('sExpected').textContent = cs.map(function(c){ return money(a.filter(function(r){return r.currency===c && r.status!=='canceled' && r.status!=='skipped';}).reduce(function(s,r){return s+(+r.expected||0);},0), c); }).join(' / ');
   $('sActual').textContent = cs.map(function(c){ return money(d.filter(function(r){return r.currency===c;}).reduce(function(s,r){return s+(+r.actual||0);},0), c); }).join(' / ');
+  var surgeStats=(db.surgeTasks||[]).filter(function(t){var date=(t.actual!=null?(t.finishedAt||t.actualRecordedAt||t.createdAt):t.createdAt||'').slice(0,10);return (!$('sFrom').value||date>=$('sFrom').value)&&(!$('sTo').value||date<=$('sTo').value)&&(!$('sPlatform').value||(t.name+' '+(t.platforms||[]).join(' ')).toLowerCase().indexOf($('sPlatform').value.toLowerCase())>=0);});
+  if($('sCurrency').value==='all'||$('sCurrency').value==='CNY'){var ex=surgeStats.filter(function(t){return t.expected!=null;}).reduce(function(sum,t){return sum+(+t.expected||0);},0);var ac=surgeStats.filter(function(t){return t.actual!=null;}).reduce(function(sum,t){return sum+(+t.actual||0);},0);$('sExpected').textContent+=' / '+money(ex,'CNY');$('sActual').textContent+=' / '+money(ac,'CNY');}
 
   function group(k){
     var m = {};
@@ -657,16 +663,16 @@ function renderSurge(){
       '<div class="grid"><div class="field"><label>登记日期</label><input type="date" id="sd_'+esc(t.id)+'" value="'+today+'"></div><div class="field"><label>当天完成总额（人民币）</label><input type="number" min="0" step="0.01" id="sa_'+esc(t.id)+'" placeholder="当天有效消费总额" value="'+(todayEntry?esc(todayEntry.amount):'')+'"></div></div>';
     var buttons = archived
       ? '<button class="small success" data-act="restoreSurge" data-id="'+esc(t.id)+'">恢复任务</button><button class="small secondary" data-act="surgeHistory" data-id="'+esc(t.id)+'">查看每日记录</button>'
-      : '<button class="small primary" data-act="saveSurgeDay" data-id="'+esc(t.id)+'">保存当天总额</button><button class="small secondary" data-act="surgeHistory" data-id="'+esc(t.id)+'">查看每日记录</button><button class="small secondary" data-act="archiveSurge" data-id="'+esc(t.id)+'">归档任务</button>';
-    return '<div class="item"><div class="itemtop"><div class="title">'+esc(t.name)+'<br>'+((t.platforms||[]).map(function(x){return badge(x);}).join(' '))+' '+(archived?badge('已归档','amber'):'')+'</div><b>'+esc(target!=null?money(total,'CNY')+' / '+money(target,'CNY'):'本月 '+money(total,'CNY'))+'</b></div>'
+      : '<button class="small primary" data-act="saveSurgeDay" data-id="'+esc(t.id)+'">保存当天总额</button><button class="small success" data-act="finishSurge" data-id="'+esc(t.id)+'">结束任务并登记收益</button><button class="small secondary" data-act="surgeHistory" data-id="'+esc(t.id)+'">查看每日记录</button><button class="small secondary" data-act="archiveSurge" data-id="'+esc(t.id)+'">归档任务</button>';
+    return '<div class="item"><div class="itemtop"><div class="title">'+esc(t.name)+'<br>'+((t.platforms||[]).map(function(x){return badge(x);}).join(' '))+' '+(archived?badge(t.status==='finished'?'已结束':'已归档','amber'):'')+'</div><b>'+esc(target!=null?money(total,'CNY')+' / '+money(target,'CNY'):'本月 '+money(total,'CNY'))+'</b></div>'
       +'<p><b>本月有效消费：</b>'+esc(money(total,'CNY'))+'　<b>历史累计：</b>'+esc(money(allTotal,'CNY'))+'<br>'+(target>0?'<b>目标进度：</b>'+pct.toFixed(1)+'%　<b>剩余：</b>'+money(Math.max(0,target-total),'CNY')+'<br>':'')
       +(t.bestDate?'<b>最优完成时间：</b>'+esc(t.bestDate)+'　':'')+(t.deadline?'<b>Deadline：</b>'+esc(t.deadline):'')
-      +(t.notes?'<br><b>备注：</b>'+esc(t.notes):'')+'</p>'
+      +'<br><b>预期收益：</b>'+esc(t.expected==null?'未填写':money(t.expected,'CNY'))+(t.actual!=null?'<br><b>实际收益：</b>'+esc(money(t.actual,'CNY')):'')+(t.finishedAt?'<br><b>结束时间：</b>'+esc(t.finishedAt):'')+(t.notes?'<br><b>备注：</b>'+esc(t.notes):'')+'</p>'
       +dayInput+'<div class="actions">'+buttons+'</div>'
       +'<div id="sh_'+esc(t.id)+'" class="muted hidden">'+(es.length?es.map(function(e){return esc(e.date)+'：'+esc(money(e.amount,'CNY'));}).join('<br>'):'暂无每日登记')+'</div></div>';
   }
-  var active=tasks.filter(function(t){return !t.archivedAt;});
-  var archived=tasks.filter(function(t){return !!t.archivedAt;});
+  var active=tasks.filter(function(t){return !t.archivedAt && t.status!=='finished';});
+  var archived=tasks.filter(function(t){return !!t.archivedAt || t.status==='finished';});
   $('surgeList').innerHTML=active.length?active.map(function(t){return taskCard(t,false);}).join(''):'<div class="empty">还没有进行中的冲量任务，请在上方创建。</div>';
   $('surgeArchivedList').innerHTML=archived.length?archived.map(function(t){return taskCard(t,true);}).join(''):'<div class="empty">暂无已归档任务。</div>';
 }
@@ -676,7 +682,7 @@ function createSurgeTask(e){
   if(target!==null&&(!isFinite(target)||target<=0)){alert('目标金额如填写，必须大于0；不设置目标请留空。');return;}
   var best=$('surgeBestDate').value, deadline=$('surgeDeadline').value;
   if(best&&deadline&&best>deadline){alert('最优完成时间不能晚于Deadline');return;}
-  db.surgeTasks.push({id:uid(),name:name,platforms:$('surgePlatforms').value.split(/[,，;；]/).map(function(x){return x.trim();}).filter(Boolean),target:target,bestDate:best,deadline:deadline,notes:$('surgeNotes').value.trim(),createdAt:nowISO()});
+  db.surgeTasks.push({id:uid(),name:name,platforms:$('surgePlatforms').value.split(/[,，;；]/).map(function(x){return x.trim();}).filter(Boolean),target:target,expected:$('surgeExpected').value.trim()===''?null:+$('surgeExpected').value,actual:null,bestDate:best,deadline:deadline,notes:$('surgeNotes').value.trim(),status:'active',createdAt:nowISO()});
   $('surgeForm').reset(); renderSurge(); save().then(function(ok){if(!ok)alert('任务暂存于页面，但保存失败，请检查存储。');});
 }
 function saveSurgeDay(id){
@@ -685,6 +691,17 @@ function saveSurgeDay(id){
   var found=db.surgeEntries.find(function(e){return e.taskId===id&&e.date===date;});
   if(found){found.amount=+raw;found.updatedAt=nowISO();}else db.surgeEntries.push({id:uid(),taskId:id,date:date,amount:+raw,createdAt:nowISO()});
   renderSurge(); save().then(function(ok){if(!ok)alert('保存失败，请检查存储。');});
+}
+
+function finishSurge(id, archive){
+  var t=(db.surgeTasks||[]).find(function(x){return x.id===id;}); if(!t)return;
+  var current=t.actual==null?'':String(t.actual);
+  var raw=prompt((archive?'归档':'结束')+'冲量任务：请登记实际收益（人民币；无收益填0）',current);
+  if(raw===null)return;
+  raw=raw.trim(); if(raw===''||!isFinite(+raw)){alert('请填写有效的实际收益金额；没有收益请填0。');return;}
+  t.actual=+raw; t.finishedAt=nowISO(); t.status='finished'; t.actualRecordedAt=nowISO();
+  if(archive)t.archivedAt=nowISO();
+  save().then(function(ok){render();if(!ok)alert('状态已在页面更新，但保存失败，请立即导出备份并检查浏览器存储。');});
 }
 
 function render(){
@@ -890,8 +907,10 @@ function bindEvents(){
     var rec = db.records.find(function(x){ return x.id===id; });
     if(act==='saveSurgeDay') saveSurgeDay(id);
     else if(act==='surgeHistory'){var sh=$('sh_'+id);if(sh)sh.classList.toggle('hidden');}
-    else if(act==='archiveSurge' && confirm('归档该冲量任务？任务和每日登记都会保留，可随时恢复。')){var st=db.surgeTasks.find(function(t){return t.id===id;});if(st){st.archivedAt=nowISO();save().then(render);}}
-    else if(act==='restoreSurge'){var rt=db.surgeTasks.find(function(t){return t.id===id;});if(rt){delete rt.archivedAt;rt.updatedAt=nowISO();save().then(render);}}
+    else if(act==='archiveSurge' && confirm('归档该冲量任务？需要登记实际收益；任务和每日登记仍会保留。')){finishSurge(id,true);}
+    else if(act==='finishSurge'){if(confirm('结束该冲量任务？结束后将从待办移出，并登记实际收益。'))finishSurge(id,false);}
+    else if(act==='goSurge'){document.querySelector('[data-tab="surge"]').click();}
+    else if(act==='restoreSurge'){var rt=db.surgeTasks.find(function(t){return t.id===id;});if(rt){delete rt.archivedAt;rt.status='active';delete rt.finishedAt;rt.updatedAt=nowISO();save().then(render);}}
     else if(act==='complete') complete(id);
     else if(act==='feedback') feedback(id);
     else if(act==='skip' && rec && confirm('确认放弃/跳过这次任务？')){ rec.status='skipped'; save().then(render); }

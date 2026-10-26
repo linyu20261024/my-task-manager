@@ -61,7 +61,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 </head>
 <body>
 <header>
-<div class="version-tag">修复版本：2026-10-25 13:45（北京时间）</div>
+<div class="version-tag">版本：2026-10-26 09:54（北京时间）</div>
 <h1>周期任务与收益管理</h1>
 <p>第二版 · 自动计算未来24小时待办</p>
 </header>
@@ -72,6 +72,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 <nav class="tabs">
 <button class="tab on" data-tab="today">未来24小时</button>
 <button class="tab" data-tab="rules">周期规则</button>
+<button class="tab" data-tab="surge">冲量任务</button>
 <button class="tab" data-tab="history">执行记录</button>
 <button class="tab" data-tab="stats">收益统计</button>
 <button class="tab" data-tab="data">数据管理</button>
@@ -129,6 +130,22 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 </div>
 </section>
 
+<section id="surge" class="panel">
+<div class="card">
+<h2>新建冲量任务</h2>
+<p class="muted">独立任务，不按周期自动生成。平台可填写多个，以逗号分隔；账户通过任务名称后缀区分。每日填写当天有效总额（退款请先扣除）。目标按自然月统计；归档只隐藏日常操作，不删除历史金额。</p>
+<form id="surgeForm"><div class="grid">
+<div class="field"><label>任务名称 *</label><input id="surgeName" required maxlength="120" placeholder="例如：月消费冲量 - 主账户"></div>
+<div class="field"><label>平台（多个用逗号分隔）</label><input id="surgePlatforms" placeholder="平台A,平台B"></div>
+<div class="field"><label>目标金额（可选，人民币）</label><input id="surgeTarget" type="number" min="0.01" step="0.01" placeholder="例如：1000000"></div>
+<div class="field"><label>最优完成时间（可选）</label><input id="surgeBestDate" type="datetime-local"></div>
+<div class="field"><label>Deadline（可选）</label><input id="surgeDeadline" type="datetime-local"></div>
+<div class="field full"><label>备注（可选）</label><textarea id="surgeNotes" placeholder="任务说明、消费口径等"></textarea></div>
+</div><div class="actions"><button class="primary" type="submit">创建冲量任务</button></div></form>
+</div>
+<div class="card"><h2>进行中的冲量任务</h2><div id="surgeList"></div></div><div class="card"><h2>已归档冲量任务</h2><p class="muted">归档不会删除任务或每日登记；可随时恢复到进行中列表。</p><div id="surgeArchivedList"></div></div>
+</section>
+
 <section id="history" class="panel">
 <div class="card">
 <h2>执行记录与反馈</h2>
@@ -137,7 +154,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 <div><label>开始日期</label><input type="date" id="hFrom"></div>
 <div><label>结束日期</label><input type="date" id="hTo"></div>
 <div><label>平台</label><input id="hPlatform" placeholder="全部平台"></div>
-<div><label>状态</label><select id="hStatus"><option value="all">全部</option><option value="pending">待执行</option><option value="done">已完成</option><option value="skipped">已放弃</option></select></div>
+<div><label>状态</label><select id="hStatus"><option value="all">全部</option><option value="pending">待执行</option><option value="done">已完成</option><option value="skipped">已放弃</option><option value="canceled">已取消</option></select></div>
 </div>
 <div id="historyList"></div>
 </div>
@@ -166,7 +183,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 <section id="data" class="panel">
 <div class="card">
 <h2>数据管理</h2>
-<p class="muted">JSON备份包含规则与执行历史。</p>
+<p class="muted">完整 JSON 备份包含周期规则、全部执行记录、冲量任务及每日金额登记。</p>
 <div class="actions">
 <button class="primary" id="backup">导出完整JSON备份</button>
 <button class="secondary" id="exportRules">导出规则CSV</button>
@@ -220,7 +237,7 @@ function fmtDate(d){ return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.ge
 function lastDayOfMonth(y,m){ return new Date(y,m+1,0).getDate(); }
 
 /* ========== 全局状态 ========== */
-var db = { version:2, rules:[], records:[] };
+var db = { version:2, rules:[], records:[], surgeTasks:[], surgeEntries:[] };
 var storageReady = false;
 
 function status(msg, kind){
@@ -345,6 +362,8 @@ function load(){
     if(candidates.length){
       candidates.sort(function(a,b){ return (b._savedAt||0)-(a._savedAt||0); });
       db = candidates[0];
+      if(!Array.isArray(db.surgeTasks)) db.surgeTasks=[];
+      if(!Array.isArray(db.surgeEntries)) db.surgeEntries=[];
       var source = db._source;
       delete db._source;
       storageReady = true;
@@ -354,12 +373,12 @@ function load(){
     /* 没有任何旧数据 */
     if(localAccessible){
       storageReady = true;
-      db = {version:2, rules:[], records:[]};
+      db = {version:2, rules:[], records:[], surgeTasks:[], surgeEntries:[]};
       return {loaded:false, firstRun:true, errors:errors};
     }
     /* localStorage 也不可用 */
     storageReady = false;
-    db = {version:2, rules:[], records:[]};
+    db = {version:2, rules:[], records:[], surgeTasks:[], surgeEntries:[]};
     return {loaded:false, firstRun:true, errors:errors, storageBlocked:true};
   });
 }
@@ -465,40 +484,51 @@ function generate(){
   var now = new Date();
   var from = plusDays(sod(now), -45);
   var to = plusDays(sod(now), 45);
+  var changed = false;
   db.rules.filter(function(r){ return r.active; }).forEach(function(r){
     dueDates(r, from, to).forEach(function(x){
       var id = r.id + '_' + x.date;
       var exists = db.records.some(function(z){ return z.id === id; });
       if(!exists){
-        db.records.push({
-          id: id, ruleId: r.id, name: r.name,
-          platform: r.platform||'', category: r.category||'其他',
-          date: x.date,
-          plannedAt: x.planned.toISOString(),
-          deadlineAt: x.deadline.toISOString(),
-          expected: +r.amount||0, currency: r.currency||'CNY',
-          status: 'pending', actual: null, received: false,
-          completedAt: '', feedback: '',
-          path: r.path||'', notes: r.notes||'',
-          priority: r.priority||'中', createdAt: nowISO()
-        });
+        db.records.push({id:id,ruleId:r.id,name:r.name,platform:r.platform||'',category:r.category||'其他',date:x.date,
+          plannedAt:x.planned.toISOString(),deadlineAt:x.deadline.toISOString(),expected:+r.amount||0,currency:r.currency||'CNY',
+          status:'pending',actual:null,received:false,completedAt:'',feedback:'',path:r.path||'',notes:r.notes||'',priority:r.priority||'中',createdAt:nowISO()});
+        changed = true;
       }
     });
   });
+  return changed;
 }
+
+function syncPendingRecords(rule){
+  var now = new Date();
+  var from = plusDays(sod(now), -3650), to = plusDays(sod(now), 3650);
+  var validDates = {};
+  if(rule.active) dueDates(rule, from, to).forEach(function(x){validDates[x.date]=x;});
+  db.records.forEach(function(rec){
+    if(rec.ruleId!==rule.id || rec.status!=='pending') return;
+    var due = validDates[rec.date];
+    if(!due){rec.status='canceled';rec.canceledAt=nowISO();rec.cancelReason='规则修改后不再符合周期条件';return;}
+    rec.name=rule.name; rec.platform=rule.platform||''; rec.category=rule.category||'其他';
+    rec.plannedAt=due.planned.toISOString(); rec.deadlineAt=due.deadline.toISOString();
+    rec.expected=+rule.amount||0; rec.currency=rule.currency||'CNY'; rec.path=rule.path||'';
+    rec.notes=rule.notes||''; rec.priority=rule.priority||'中'; rec.updatedAt=nowISO();
+  });
+}
+
 
 /* ========== 渲染 ========== */
 function badge(t, k){ return '<span class="badge '+(k||'')+'">'+esc(t)+'</span>'; }
 
 function recordCard(r){
   var late = (r.status==='pending' && new Date(r.deadlineAt) < new Date());
-  var statusBadge = r.status==='done' ? badge('已完成','green') : r.status==='skipped' ? badge('已放弃','red') : badge('待执行', late?'red':'amber');
+  var statusBadge = r.status==='done' ? badge('已完成','green') : r.status==='skipped' ? badge('已放弃','red') : r.status==='canceled' ? badge('已取消','red') : badge('待执行', late?'red':'amber');
   var recvBadge = r.status==='done' ? badge(r.received?'已到账':'待到账', r.received?'green':'amber') : '';
   var actions = '';
   if(r.status === 'pending'){
     actions = '<button class="small success" data-act="complete" data-id="'+esc(r.id)+'">记录完成</button>'
             + '<button class="small secondary" data-act="skip" data-id="'+esc(r.id)+'">放弃/跳过</button>';
-  }else{
+  }else if(r.status !== 'canceled'){
     actions = '<button class="small secondary" data-act="reopen" data-id="'+esc(r.id)+'">重新打开</button>';
   }
   actions += '<button class="small secondary" data-act="feedback" data-id="'+esc(r.id)+'">编辑反馈</button>';
@@ -511,12 +541,12 @@ function recordCard(r){
     + '<p><b>计划：</b>'+esc(new Date(r.plannedAt).toLocaleString())
     + '<br><b>截止：</b>'+esc(new Date(r.deadlineAt).toLocaleString())
     + '<br><b>预期收益：</b>'+esc(money(r.expected, r.currency))
-    + actualLine + pathLine + fbLine + '</p>'
+    + (r.cancelReason?'<br><b>取消原因：</b>'+esc(r.cancelReason):'') + actualLine + pathLine + fbLine + '</p>'
     + '<div class="actions">'+actions+'</div></div>';
 }
 
 function renderToday(){
-  generate();
+  if(generate()) save();
   var now = new Date();
   var end = new Date(now.getTime() + 86400000);
   var up = db.records.filter(function(r){
@@ -582,7 +612,7 @@ function renderStats(){
   var cs = $('sCurrency').value==='all' ? ['CNY','points','USD','other'] : [$('sCurrency').value];
   $('sN').textContent = a.length;
   $('sDone').textContent = d.length;
-  $('sExpected').textContent = cs.map(function(c){ return money(a.filter(function(r){return r.currency===c;}).reduce(function(s,r){return s+(+r.expected||0);},0), c); }).join(' / ');
+  $('sExpected').textContent = cs.map(function(c){ return money(a.filter(function(r){return r.currency===c && r.status!=='canceled' && r.status!=='skipped';}).reduce(function(s,r){return s+(+r.expected||0);},0), c); }).join(' / ');
   $('sActual').textContent = cs.map(function(c){ return money(d.filter(function(r){return r.currency===c;}).reduce(function(s,r){return s+(+r.actual||0);},0), c); }).join(' / ');
 
   function group(k){
@@ -612,11 +642,57 @@ function renderStats(){
   $('byTask').innerHTML = table(group('name'));
 }
 
+
+function renderSurge(){
+  var tasks=db.surgeTasks||[], entries=db.surgeEntries||[];
+  function taskCard(t, archived){
+    var es=entries.filter(function(e){return e.taskId===t.id;}).sort(function(a,b){return b.date.localeCompare(a.date);});
+    var month=todayStr().slice(0,7);
+    var total=es.filter(function(e){return e.date.slice(0,7)===month;}).reduce(function(sum,e){return sum+(+e.amount||0);},0);
+    var allTotal=es.reduce(function(sum,e){return sum+(+e.amount||0);},0);
+    var target=t.target==null?null:+t.target;
+    var pct=target>0?Math.min(100,total/target*100):null;
+    var today=todayStr(), todayEntry=es.find(function(e){return e.date===today;});
+    var dayInput = archived ? '' :
+      '<div class="grid"><div class="field"><label>登记日期</label><input type="date" id="sd_'+esc(t.id)+'" value="'+today+'"></div><div class="field"><label>当天完成总额（人民币）</label><input type="number" min="0" step="0.01" id="sa_'+esc(t.id)+'" placeholder="当天有效消费总额" value="'+(todayEntry?esc(todayEntry.amount):'')+'"></div></div>';
+    var buttons = archived
+      ? '<button class="small success" data-act="restoreSurge" data-id="'+esc(t.id)+'">恢复任务</button><button class="small secondary" data-act="surgeHistory" data-id="'+esc(t.id)+'">查看每日记录</button>'
+      : '<button class="small primary" data-act="saveSurgeDay" data-id="'+esc(t.id)+'">保存当天总额</button><button class="small secondary" data-act="surgeHistory" data-id="'+esc(t.id)+'">查看每日记录</button><button class="small secondary" data-act="archiveSurge" data-id="'+esc(t.id)+'">归档任务</button>';
+    return '<div class="item"><div class="itemtop"><div class="title">'+esc(t.name)+'<br>'+((t.platforms||[]).map(function(x){return badge(x);}).join(' '))+' '+(archived?badge('已归档','amber'):'')+'</div><b>'+esc(target!=null?money(total,'CNY')+' / '+money(target,'CNY'):'本月 '+money(total,'CNY'))+'</b></div>'
+      +'<p><b>本月有效消费：</b>'+esc(money(total,'CNY'))+'　<b>历史累计：</b>'+esc(money(allTotal,'CNY'))+'<br>'+(target>0?'<b>目标进度：</b>'+pct.toFixed(1)+'%　<b>剩余：</b>'+money(Math.max(0,target-total),'CNY')+'<br>':'')
+      +(t.bestDate?'<b>最优完成时间：</b>'+esc(t.bestDate)+'　':'')+(t.deadline?'<b>Deadline：</b>'+esc(t.deadline):'')
+      +(t.notes?'<br><b>备注：</b>'+esc(t.notes):'')+'</p>'
+      +dayInput+'<div class="actions">'+buttons+'</div>'
+      +'<div id="sh_'+esc(t.id)+'" class="muted hidden">'+(es.length?es.map(function(e){return esc(e.date)+'：'+esc(money(e.amount,'CNY'));}).join('<br>'):'暂无每日登记')+'</div></div>';
+  }
+  var active=tasks.filter(function(t){return !t.archivedAt;});
+  var archived=tasks.filter(function(t){return !!t.archivedAt;});
+  $('surgeList').innerHTML=active.length?active.map(function(t){return taskCard(t,false);}).join(''):'<div class="empty">还没有进行中的冲量任务，请在上方创建。</div>';
+  $('surgeArchivedList').innerHTML=archived.length?archived.map(function(t){return taskCard(t,true);}).join(''):'<div class="empty">暂无已归档任务。</div>';
+}
+function createSurgeTask(e){
+  e.preventDefault(); var name=$('surgeName').value.trim(); if(!name){alert('请填写任务名称');return;}
+  var targetText=$('surgeTarget').value.trim(), target=targetText===''?null:+targetText;
+  if(target!==null&&(!isFinite(target)||target<=0)){alert('目标金额如填写，必须大于0；不设置目标请留空。');return;}
+  var best=$('surgeBestDate').value, deadline=$('surgeDeadline').value;
+  if(best&&deadline&&best>deadline){alert('最优完成时间不能晚于Deadline');return;}
+  db.surgeTasks.push({id:uid(),name:name,platforms:$('surgePlatforms').value.split(/[,，;；]/).map(function(x){return x.trim();}).filter(Boolean),target:target,bestDate:best,deadline:deadline,notes:$('surgeNotes').value.trim(),createdAt:nowISO()});
+  $('surgeForm').reset(); renderSurge(); save().then(function(ok){if(!ok)alert('任务暂存于页面，但保存失败，请检查存储。');});
+}
+function saveSurgeDay(id){
+  var date=$('sd_'+id).value, raw=$('sa_'+id).value.trim();
+  if(!date||raw===''||!isFinite(+raw)||+raw<0){alert('请选择日期并填写非负的当天总额');return;}
+  var found=db.surgeEntries.find(function(e){return e.taskId===id&&e.date===date;});
+  if(found){found.amount=+raw;found.updatedAt=nowISO();}else db.surgeEntries.push({id:uid(),taskId:id,date:date,amount:+raw,createdAt:nowISO()});
+  renderSurge(); save().then(function(ok){if(!ok)alert('保存失败，请检查存储。');});
+}
+
 function render(){
   try{ renderToday(); }catch(e){ console.error('renderToday error', e); }
   try{ renderRules(); }catch(e){ console.error('renderRules error', e); }
   try{ renderHistory(); }catch(e){ console.error('renderHistory error', e); }
   try{ renderStats(); }catch(e){ console.error('renderStats error', e); }
+  try{ renderSurge(); }catch(e){ console.error('renderSurge error', e); }
 }
 
 /* ========== 表单：显示/隐藏字段 ========== */
@@ -670,7 +746,7 @@ function formRule(){
     active: $('active').value === 'true',
     path: $('path').value,
     notes: $('notes').value,
-    createdAt: nowISO(),
+    createdAt: (db.rules.find(function(x){return x.id===($('rid').value||'');})||{}).createdAt || nowISO(),
     updatedAt: nowISO()
   };
 }
@@ -785,6 +861,7 @@ function bindEvents(){
   });
 
   $('freq').onchange = showFields;
+  $('surgeForm').onsubmit = createSurgeTask;
   $('resetBtn').onclick = reset;
 
   /* 表单提交 */
@@ -794,14 +871,14 @@ function bindEvents(){
     if(!r.name || !r.startDate){ alert('请填写事项名称和生效日期'); return; }
     if(r.endDate && r.endDate < r.startDate){ alert('结束日期不能早于开始日期'); return; }
     var old = db.rules.find(function(x){ return x.id===r.id; });
-    if(old){ db.rules = db.rules.map(function(x){ return x.id===r.id ? r : x; }); }
+    if(old){ r.createdAt=old.createdAt||r.createdAt; db.rules = db.rules.map(function(x){ return x.id===r.id ? r : x; }); syncPendingRecords(r); }
     else{ db.rules.push(r); }
+    reset();
+    generate();
+    render();
     save().then(function(ok){
-      reset();
-      generate();
-      render();
-      if(ok) alert(old ? '规则修改成功，全部数据已保存，历史记录保留。' : '规则新增成功，待办已自动计算。');
-      else alert('规则已在页面暂存，但持久化保存失败！请立即导出JSON备份，不要关闭页面。');
+      if(ok) alert(old ? '规则修改成功：待执行记录已同步，已完成/已取消历史记录保持不变。' : '规则新增成功，待办已自动计算并保存。');
+      else alert('数据已在页面暂存，但持久化保存失败！请立即检查存储并备份。');
     });
   };
 
@@ -811,16 +888,21 @@ function bindEvents(){
     if(!b) return;
     var act = b.dataset.act, id = b.dataset.id;
     var rec = db.records.find(function(x){ return x.id===id; });
-    if(act==='complete') complete(id);
+    if(act==='saveSurgeDay') saveSurgeDay(id);
+    else if(act==='surgeHistory'){var sh=$('sh_'+id);if(sh)sh.classList.toggle('hidden');}
+    else if(act==='archiveSurge' && confirm('归档该冲量任务？任务和每日登记都会保留，可随时恢复。')){var st=db.surgeTasks.find(function(t){return t.id===id;});if(st){st.archivedAt=nowISO();save().then(render);}}
+    else if(act==='restoreSurge'){var rt=db.surgeTasks.find(function(t){return t.id===id;});if(rt){delete rt.archivedAt;rt.updatedAt=nowISO();save().then(render);}}
+    else if(act==='complete') complete(id);
     else if(act==='feedback') feedback(id);
     else if(act==='skip' && rec && confirm('确认放弃/跳过这次任务？')){ rec.status='skipped'; save().then(render); }
     else if(act==='reopen' && rec){ rec.status='pending'; save().then(render); }
     else if(act==='editRule') editRule(id);
     else if(act==='toggle'){
       var rx = db.rules.find(function(x){ return x.id===id; });
-      if(rx){ rx.active = !rx.active; save().then(function(){ generate(); render(); }); }
+      if(rx){ rx.active = !rx.active; syncPendingRecords(rx); generate(); save().then(function(){ render(); }); }
     }
-    else if(act==='deleteRule' && confirm('删除规则？已有执行历史会保留。')){
+    else if(act==='deleteRule' && confirm('删除规则？已完成、已放弃和已取消记录会保留；该规则尚未执行的待办会标记为已取消。')){
+      db.records.forEach(function(r){if(r.ruleId===id && r.status==='pending'){r.status='canceled';r.canceledAt=nowISO();r.cancelReason='所属规则已删除';}});
       db.rules = db.rules.filter(function(x){ return x.id!==id; });
       save().then(render);
     }
@@ -833,6 +915,7 @@ function bindEvents(){
 
   /* 导出 */
   $('backup').onclick = function(){
+    if(!storageReady){alert('当前数据存储未就绪，为避免导出空数据，请先刷新或导入已有JSON备份。');return;}
     download('周期任务备份_'+todayStr()+'.json', JSON.stringify(db, null, 2), 'application/json;charset=utf-8');
   };
   $('exportRules').onclick = function(){
@@ -864,10 +947,11 @@ function bindEvents(){
       try{
         var x = JSON.parse(rd.result);
         if(x.version !== 2 || !Array.isArray(x.rules) || !Array.isArray(x.records)) throw new Error('格式不对');
+        if(!Array.isArray(x.surgeTasks)) x.surgeTasks=[]; if(!Array.isArray(x.surgeEntries)) x.surgeEntries=[];
         if(!confirm('恢复会替换当前全部数据，确定继续？')) return;
         db = x;
-        save().then(render);
-        alert('恢复成功');
+        storageReady = true;
+        save().then(function(ok){ render(); alert(ok ? '恢复并保存成功' : '备份已载入页面，但自动保存失败；请检查浏览器存储权限。'); });
       }catch(e){ alert('文件不是有效的第二版备份'); }
     };
     rd.readAsText(f);
@@ -915,7 +999,7 @@ function bindEvents(){
               createdAt: nowISO(), updatedAt: nowISO()
             });
           });
-          save().then(function(){ generate(); render(); });
+          generate(); render(); save().then(function(ok){if(!ok)alert('规则已导入到当前页面，但保存失败，请检查存储并备份。');});
           $('csvPreview').innerHTML = '<p class="success">已成功导入。</p>';
         };
       }catch(e){ alert('CSV格式有误或没有有效数据行'); }
@@ -926,7 +1010,7 @@ function bindEvents(){
   /* 清空 */
   $('clear').onclick = function(){
     if(confirm('确定清空全部规则和执行记录？此操作无法撤销。') && confirm('最后确认：已备份或不需要保留这些数据？')){
-      db = {version:2, rules:[], records:[]};
+      db = {version:2, rules:[], records:[], surgeTasks:[], surgeEntries:[]};
       save().then(render);
       alert('已清空');
     }
@@ -972,7 +1056,7 @@ function init(){
   }).catch(function(err){
     /* 读取失败/超时：不覆盖旧数据，进入安全模式 */
     console.error('加载失败:', err);
-    db = {version:2, rules:[], records:[]};
+    db = {version:2, rules:[], records:[], surgeTasks:[], surgeEntries:[]};
     storageReady = false;
     render();
     status('⚠️读取数据时遇到问题：'+err.message+'。已进入安全模式，界面可操作但暂不自动保存。请尽快到「数据管理」导入JSON备份恢复。','bad');

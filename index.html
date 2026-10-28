@@ -61,7 +61,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 </head>
 <body>
 <header>
-<div class="version-tag">版本：2026-10-28 12:25（北京时间）</div>
+<div class="version-tag">版本：2026-10-28 13:25（北京时间）</div>
 <h1>周期任务与收益管理</h1>
 <p>第二版 · 自动计算未来24小时待办</p>
 </header>
@@ -156,6 +156,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 <div><label>开始日期</label><input type="date" id="hFrom"></div>
 <div><label>结束日期</label><input type="date" id="hTo"></div>
 <div><label>平台</label><input id="hPlatform" placeholder="全部平台"></div>
+<div><label>事项查询</label><input id="hItem" placeholder="输入事项名称关键字"></div>
 <div><label>状态</label><select id="hStatus"><option value="all">全部</option><option value="pending">待执行</option><option value="done">已完成</option><option value="skipped">已放弃</option><option value="canceled">已取消</option></select></div>
 </div>
 <div id="historyList"></div>
@@ -693,6 +694,7 @@ function renderHistory(){
     return ((!$('hFrom').value || r.date >= $('hFrom').value)
       && (!$('hTo').value || r.date <= $('hTo').value)
       && ((!$('hPlatform').value || (r.platform||'').toLowerCase().indexOf($('hPlatform').value.toLowerCase())>=0))
+      && ((!$('hItem').value || (r.name||'').toLowerCase().indexOf($('hItem').value.trim().toLowerCase())>=0))
       && ($('hStatus').value==='all' || r.status===$('hStatus').value));
   }).sort(function(a,b){ return b.date.localeCompare(a.date); });
   $('historyList').innerHTML = a.length ? a.map(recordCard).join('') : '<div class="empty">没有符合条件的记录。</div>';
@@ -1133,7 +1135,7 @@ function bindEvents(){
 
   /* 筛选 */
   ['ruleQ','ruleFilter'].forEach(function(id){ var el=$(id); if(el) el.addEventListener('input', renderRules); });
-  ['hFrom','hTo','hPlatform','hStatus'].forEach(function(id){ var el=$(id); if(el) el.addEventListener('input', renderHistory); });
+  ['hFrom','hTo','hPlatform','hItem','hStatus'].forEach(function(id){ var el=$(id); if(el) el.addEventListener('input', renderHistory); });
   /* sCurrency 当前版本没有对应控件；所有可选筛选器先判空，避免缺少元素导致整个初始化中断。 */
   ['sFrom','sTo','sPlatform'].forEach(function(id){ var el=$(id); if(el) el.addEventListener('input', renderStats); });
 

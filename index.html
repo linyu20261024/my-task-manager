@@ -61,7 +61,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 </head>
 <body>
 <header>
-<div class="version-tag">版本：2026-10-26 15:50（北京时间）</div>
+<div class="version-tag">版本：2026-10-28 10:50（北京时间）</div>
 <h1>周期任务与收益管理</h1>
 <p>第二版 · 自动计算未来24小时待办</p>
 </header>
@@ -165,20 +165,22 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 <section id="stats" class="panel">
 <div class="card">
 <h2>收益统计</h2>
+<p class="muted">现金收益统一按人民币统计，不包含积分及冲量过程金额。本月按自然月计算；收益计入实际收益确认日期所在月份，而不是任务创建或计划日期。</p>
+<div class="stats">
+<div class="stat"><span>本月现金实际收益（自然月）</span><strong id="sMonthTotal">¥0.00</strong></div>
+<div class="stat"><span>本月周期任务收益</span><strong id="sMonthPeriodic">¥0.00</strong></div>
+<div class="stat"><span>本月冲量任务收益</span><strong id="sMonthSurge">¥0.00</strong></div>
+<div class="stat"><span>历史累计现金收益</span><strong id="sAllTotal">¥0.00</strong></div>
+</div>
+<hr>
+<h3>收益明细筛选</h3>
 <div class="filters">
 <div><label>开始日期</label><input type="date" id="sFrom"></div>
 <div><label>结束日期</label><input type="date" id="sTo"></div>
-<div><label>平台筛选</label><input id="sPlatform" placeholder="全部平台"></div>
-<div><label>收益单位</label><select id="sCurrency"><option value="all">全部单位</option><option value="CNY">人民币</option><option value="points">积分</option><option value="USD">美元</option><option value="other">其他</option></select></div>
+<div><label>平台/任务筛选</label><input id="sPlatform" placeholder="全部平台或任务"></div>
 </div>
-<div class="stats">
-<div class="stat"><span>记录数</span><strong id="sN">0</strong></div>
-<div class="stat"><span>完成次数</span><strong id="sDone">0</strong></div>
-<div class="stat"><span>预期收益</span><strong id="sExpected">0</strong></div>
-<div class="stat"><span>实际收益</span><strong id="sActual">0</strong></div>
-</div>
-<h3>按平台统计</h3><div id="byPlatform"></div>
-<h3>按事项统计</h3><div id="byTask"></div>
+<h3>按平台统计（人民币现金收益）</h3><div id="byPlatform"></div>
+<h3>按事项统计（人民币现金收益）</h3><div id="byTask"></div>
 </div>
 </section>
 
@@ -633,9 +635,10 @@ function renderToday(){
   var activeSurges=(db.surgeTasks||[]).filter(function(t){return !t.archivedAt && t.status!=='finished';});
   $('upSum').textContent = money(up.filter(function(r){return r.currency==='CNY';}).reduce(function(s,r){return s+(+r.expected||0);},0)+activeSurges.reduce(function(s,t){return s+(t.expected==null?0:(+t.expected||0));},0), 'CNY');
   $('doneN').textContent = db.records.filter(function(r){return r.status==='done' && r.date===todayStr();}).length;
-  $('monthSum').textContent = money(db.records.filter(function(r){
-    return r.status==='done' && r.date.startsWith(todayStr().slice(0,7)) && r.currency==='CNY';
-  }).reduce(function(s,r){return s+(+r.actual||0);},0), 'CNY');
+  var currentMonth=todayStr().slice(0,7);
+  var monthPeriodicIncome=db.records.filter(function(r){return r.status==='done' && r.currency==='CNY' && r.actual!==null && r.actual!=='' && (function(v){var d=new Date(v);return isFinite(d.getTime())?new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit'}).format(d):String(v||'').slice(0,7);})(r.completedAt||r.date||'')===currentMonth;}).reduce(function(s,r){return s+(+r.actual||0);},0);
+  var monthSurgeIncome=(db.surgeTasks||[]).filter(function(t){return t.actual!==null && t.actual!=='' && (function(v){var d=new Date(v);return isFinite(d.getTime())?new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit'}).format(d):String(v||'').slice(0,7);})(t.actualRecordedAt||t.finishedAt||t.createdAt||'')===currentMonth;}).reduce(function(s,t){return s+(+t.actual||0);},0);
+  $('monthSum').textContent = money(monthPeriodicIncome+monthSurgeIncome, 'CNY');
 
   var surgeDue=(db.surgeTasks||[]).filter(function(t){return !t.archivedAt && t.status!=='finished';});
   var surgeHtml=surgeDue.map(function(t){var es=(db.surgeEntries||[]).filter(function(e){return e.taskId===t.id;});var total=es.reduce(function(sum,e){return sum+(+e.amount||0);},0);var target=t.target==null?null:+t.target;return '<div class="item"><div class="itemtop"><div class="title">'+esc(t.name)+'<br>'+((t.platforms||[]).map(function(x){return badge(x);}).join(' '))+badge('冲量任务','amber')+(target!==null&&total>=target?badge('目标已达标','green'):'')+'</div><b>'+(target!==null?esc(money(total,'CNY'))+' / '+esc(money(target,'CNY')):'累计 '+esc(money(total,'CNY')) )+'</b></div><p><b>预期收益：</b>'+esc(t.expected==null?'未填写':money(t.expected,'CNY'))+(t.bestDate?'<br><b>最优完成时间：</b>'+esc(t.bestDate):'')+(t.deadline?'<br><b>Deadline：</b>'+esc(t.deadline):'')+'</p><div class="actions"><button class="small primary" data-act="goSurge" data-id="'+esc(t.id)+'">登记/查看冲量</button><button class="small success" data-act="finishSurge" data-id="'+esc(t.id)+'">结束任务并登记收益</button></div></div>';}).join('');
@@ -679,48 +682,72 @@ function renderHistory(){
 }
 
 function renderStats(){
-  var a = db.records.filter(function(r){
-    return ((!$('sFrom').value || r.date >= $('sFrom').value)
-      && (!$('sTo').value || r.date <= $('sTo').value)
-      && ((!$('sPlatform').value || (r.platform||'').toLowerCase().indexOf($('sPlatform').value.toLowerCase())>=0))
-      && ($('sCurrency').value==='all' || r.currency===$('sCurrency').value));
-  });
-  var d = a.filter(function(r){ return r.status==='done'; });
-  var cs = $('sCurrency').value==='all' ? ['CNY','points','USD','other'] : [$('sCurrency').value];
-  $('sN').textContent = a.length;
-  $('sDone').textContent = d.length;
-  $('sExpected').textContent = cs.map(function(c){ return money(a.filter(function(r){return r.currency===c && r.status!=='canceled' && r.status!=='skipped';}).reduce(function(s,r){return s+(+r.expected||0);},0), c); }).join(' / ');
-  $('sActual').textContent = cs.map(function(c){ return money(d.filter(function(r){return r.currency===c;}).reduce(function(s,r){return s+(+r.actual||0);},0), c); }).join(' / ');
-  var surgeStats=(db.surgeTasks||[]).filter(function(t){var date=(t.actual!=null?(t.finishedAt||t.actualRecordedAt||t.createdAt):t.createdAt||'').slice(0,10);return (!$('sFrom').value||date>=$('sFrom').value)&&(!$('sTo').value||date<=$('sTo').value)&&(!$('sPlatform').value||(t.name+' '+(t.platforms||[]).join(' ')).toLowerCase().indexOf($('sPlatform').value.toLowerCase())>=0);});
-  if($('sCurrency').value==='all'||$('sCurrency').value==='CNY'){var ex=surgeStats.filter(function(t){return t.expected!=null;}).reduce(function(sum,t){return sum+(+t.expected||0);},0);var ac=surgeStats.filter(function(t){return t.actual!=null;}).reduce(function(sum,t){return sum+(+t.actual||0);},0);$('sExpected').textContent+=' / '+money(ex,'CNY');$('sActual').textContent+=' / '+money(ac,'CNY');}
+  var month = todayStr().slice(0,7);
+  function incomeDate(value, fallback){
+    var raw=String(value || fallback || '');
+    if(/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    if(!raw) return '';
+    var d=new Date(raw); if(!isFinite(d.getTime())) return raw.slice(0,10);
+    var parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(d);
+    var out={}; parts.forEach(function(p){out[p.type]=p.value;});
+    return out.year+'-'+out.month+'-'+out.day;
+  }
+  function periodicIncomeDate(r){ return incomeDate(r.completedAt, r.date); }
+  function surgeIncomeDate(t){ return incomeDate(t.actualRecordedAt || t.finishedAt, t.createdAt); }
+  function hasCashIncome(r){ return r.status==='done' && r.currency==='CNY' && r.actual!==null && r.actual!=='' && isFinite(+r.actual); }
+  function hasSurgeIncome(t){ return t.actual!==null && t.actual!=='' && isFinite(+t.actual); }
+  var periodic = db.records.filter(hasCashIncome);
+  var surges = (db.surgeTasks||[]).filter(hasSurgeIncome);
+  var monthPeriodic = periodic.filter(function(r){ return periodicIncomeDate(r).slice(0,7)===month; })
+    .reduce(function(sum,r){ return sum+(+r.actual||0); },0);
+  var monthSurge = surges.filter(function(t){ return surgeIncomeDate(t).slice(0,7)===month; })
+    .reduce(function(sum,t){ return sum+(+t.actual||0); },0);
+  var allPeriodic = periodic.reduce(function(sum,r){ return sum+(+r.actual||0); },0);
+  var allSurge = surges.reduce(function(sum,t){ return sum+(+t.actual||0); },0);
+  $('sMonthTotal').textContent = money(monthPeriodic+monthSurge,'CNY');
+  $('sMonthPeriodic').textContent = money(monthPeriodic,'CNY');
+  $('sMonthSurge').textContent = money(monthSurge,'CNY');
+  $('sAllTotal').textContent = money(allPeriodic+allSurge,'CNY');
 
+  // 明细按用户选择的日期过滤；统计日期使用收益确认日期。旧数据缺少确认时间时，周期记录回退到执行日期。
+  var a = periodic.filter(function(r){
+    var date=periodicIncomeDate(r);
+    return ((!$('sFrom').value || date >= $('sFrom').value)
+      && (!$('sTo').value || date <= $('sTo').value)
+      && (!$('sPlatform').value || ((r.platform||'')+' '+(r.name||'')).toLowerCase().indexOf($('sPlatform').value.toLowerCase())>=0));
+  });
+  var surgeFiltered = surges.filter(function(t){
+    var date=surgeIncomeDate(t);
+    return ((!$('sFrom').value || date >= $('sFrom').value)
+      && (!$('sTo').value || date <= $('sTo').value)
+      && (!$('sPlatform').value || ((t.name||'')+' '+(t.platforms||[]).join(' ')).toLowerCase().indexOf($('sPlatform').value.toLowerCase())>=0));
+  });
   function group(k){
     var m = {};
     a.forEach(function(r){
       var n = r[k] || '未填写';
-      if(!m[n]) m[n] = {count:0, done:0, actual:{}};
-      m[n].count++;
-      if(r.status==='done'){ m[n].done++; m[n].actual[r.currency] = (m[n].actual[r.currency]||0)+(+r.actual||0); }
+      if(!m[n]) m[n] = {count:0, actual:0};
+      m[n].count++; m[n].actual += (+r.actual||0);
     });
-    return Object.entries(m).sort(function(x,y){
-      return Object.values(y[1].actual).reduce(function(a,b){return a+b;},0) - Object.values(x[1].actual).reduce(function(a,b){return a+b;},0);
+    surgeFiltered.forEach(function(t){
+      var n = k==='platform' ? ((t.platforms||[]).join('、')||'冲量任务（未填写平台）') : (t.name||'未命名冲量任务');
+      if(!m[n]) m[n] = {count:0, actual:0};
+      m[n].count++; m[n].actual += (+t.actual||0);
     });
+    return Object.entries(m).sort(function(x,y){return y[1].actual-x[1].actual;});
   }
   function table(g){
-    if(!g.length) return '<div class="empty">暂无统计数据。</div>';
-    var h = '<div style="overflow:auto"><table><tr><th>名称</th><th>记录/完成</th><th>实际收益</th></tr>';
+    if(!g.length) return '<div class="empty">所选条件下暂无已确认的现金收益。</div>';
+    var h = '<div style="overflow:auto"><table><tr><th>平台/事项</th><th>收益笔数</th><th>实际现金收益</th></tr>';
     g.forEach(function(entry){
-      var n = entry[0], v = entry[1];
-      h += '<tr><td>'+esc(n)+'</td><td>'+v.count+' / '+v.done+'</td><td>'
-         + esc(Object.entries(v.actual).map(function(e){return money(e[1], e[0]);}).join(' / ') || '0')
-         + '</td></tr>';
+      var n=entry[0],v=entry[1];
+      h += '<tr><td>'+esc(n)+'</td><td>'+v.count+'</td><td>'+esc(money(v.actual,'CNY'))+'</td></tr>';
     });
-    return h + '</table></div>';
+    return h+'</table></div>';
   }
   $('byPlatform').innerHTML = table(group('platform'));
   $('byTask').innerHTML = table(group('name'));
 }
-
 
 function renderSurge(){
   var tasks=db.surgeTasks||[], entries=db.surgeEntries||[];

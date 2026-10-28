@@ -61,7 +61,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 </head>
 <body>
 <header>
-<div class="version-tag">版本：2026-10-28 10:50（北京时间）</div>
+<div class="version-tag">版本：2026-10-28 11:20（北京时间）</div>
 <h1>周期任务与收益管理</h1>
 <p>第二版 · 自动计算未来24小时待办</p>
 </header>
@@ -216,6 +216,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 <script>
 (function(){
 'use strict';
+window.addEventListener('error', function(e){ try{ var el=document.getElementById('saveStatus'); if(el) { el.textContent='脚本运行错误：'+(e.message||'未知错误')+'（行 '+(e.lineno||'?')+'）'; el.className='bad'; } }catch(_){} });
 
 /* ========== 常量与工具 ========== */
 var KEY = 'periodic_manager_v2_clean';
@@ -551,9 +552,8 @@ function generate(){
   var to = plusDays(sod(now), 45);
   var changed = false;
   db.rules.filter(function(r){ return r.active; }).forEach(function(r){
-    // 节气规则按生效日期补齐历史发生项，避免网页长时间未打开时漏掉节气任务。
-    var ruleFrom = r.frequency==='solar' ? new Date(r.startDate+'T00:00:00') : from;
-    dueDates(r, ruleFrom, to).forEach(function(x){
+    // 只生成当前窗口内的任务；新建/修改规则不自动补造过去的节气任务，避免历史日期过多导致初始化卡顿。
+    dueDates(r, from, to).forEach(function(x){
       var id = r.id + '_' + x.date;
       var exists = db.records.some(function(z){ return z.id === id; });
       if(!exists){
@@ -969,6 +969,51 @@ function parseCSV(t){
   return rows.filter(function(r){ return r.some(function(x){ return x && x.trim(); }); });
 }
 
+/* ========== 独立绑定JSON恢复入口 ========== */
+function bindRestoreHandler(){
+  var button=$('restore'), input=$('jsonFile');
+  if(!button || !input) throw new Error('找不到JSON恢复控件');
+  button.onclick=function(){
+    var f=input.files && input.files[0];
+    if(!f){ alert('请先选择JSON备份文件'); return; }
+    button.disabled=true;
+    status('正在读取并校验JSON备份…','info');
+    var rd=new FileReader();
+    rd.onerror=function(){ button.disabled=false; status('读取备份文件失败，请重新选择文件。','bad'); alert('读取备份文件失败，请重新选择文件。'); };
+    rd.onload=function(){
+      try{
+        var x=JSON.parse(String(rd.result||''));
+        // 支持本工具直接导出的JSON；对字段缺失给出明确错误，不静默导入空数据。
+        if(!x || typeof x!=='object') throw new Error('JSON根节点不是对象');
+        if(x.data && typeof x.data==='object' && !Array.isArray(x.rules)) x=x.data;
+        if(!Array.isArray(x.rules) || !Array.isArray(x.records))
+          throw new Error('缺少 rules 或 records 数组；请选择本工具导出的“完整JSON备份”，不要选择CSV文件');
+        if(x.version!=null && Number(x.version)!==2)
+          throw new Error('备份版本为 '+x.version+'，当前页面仅支持第二版（version=2）备份');
+        var restored={version:2,rules:x.rules,records:x.records,
+          surgeTasks:Array.isArray(x.surgeTasks)?x.surgeTasks:[],
+          surgeEntries:Array.isArray(x.surgeEntries)?x.surgeEntries:[]};
+        if(!confirm('即将用备份替换当前页面数据：周期规则 '+restored.rules.length+' 条、执行记录 '+restored.records.length+' 条、冲量任务 '+restored.surgeTasks.length+' 条。建议确认已备份当前数据。继续恢复？')){
+          button.disabled=false; status('已取消恢复，当前数据未更改。','info'); return;
+        }
+        db=restored;
+        storageReady=true;
+        render();
+        save().then(function(ok){
+          button.disabled=false;
+          if(ok){ status('备份恢复并保存成功：规则 '+db.rules.length+' 条、记录 '+db.records.length+' 条、冲量任务 '+db.surgeTasks.length+' 条。','good'); alert('恢复并保存成功。'); }
+          else { status('备份已载入当前页面，但浏览器持久化保存失败。请勿关闭页面；请尝试导出JSON并检查浏览器存储权限。','bad'); alert('备份已载入当前页面，但自动保存失败。请先不要关闭页面，并检查浏览器存储权限。'); }
+        }).catch(function(e){ button.disabled=false; status('恢复后保存异常：'+(e.message||e),'bad'); alert('恢复后保存异常：'+(e.message||e)); });
+      }catch(e){
+        button.disabled=false;
+        status('备份导入失败：'+(e.message||e),'bad');
+        alert('备份导入失败：'+(e.message||e));
+      }
+    };
+    rd.readAsText(f);
+  };
+}
+
 /* ========== 事件绑定（立即绑定，不等数据加载） ========== */
 function bindEvents(){
   /* 标签切换 */
@@ -1064,24 +1109,7 @@ function bindEvents(){
       'text/csv;charset=utf-8');
   };
 
-  /* 恢复 */
-  $('restore').onclick = function(){
-    var f = $('jsonFile').files[0];
-    if(!f) return alert('请先选择JSON备份文件');
-    var rd = new FileReader();
-    rd.onload = function(){
-      try{
-        var x = JSON.parse(rd.result);
-        if(x.version !== 2 || !Array.isArray(x.rules) || !Array.isArray(x.records)) throw new Error('格式不对');
-        if(!Array.isArray(x.surgeTasks)) x.surgeTasks=[]; if(!Array.isArray(x.surgeEntries)) x.surgeEntries=[];
-        if(!confirm('恢复会替换当前全部数据，确定继续？')) return;
-        db = x;
-        storageReady = true;
-        save().then(function(ok){ render(); alert(ok ? '恢复并保存成功' : '备份已载入页面，但自动保存失败；请检查浏览器存储权限。'); });
-      }catch(e){ alert('文件不是有效的第二版备份'); }
-    };
-    rd.readAsText(f);
-  };
+  /* JSON恢复由 init() 提前单独绑定，避免其他初始化步骤出错时恢复按钮失效。 */
 
   /* CSV导入 */
   $('importCsv').onclick = function(){
@@ -1146,47 +1174,50 @@ function bindEvents(){
 
 /* ========== 初始化 ========== */
 function init(){
-  /* 填充年份下拉 */
-  for(var i=1; i<=12; i++){
-    var o = document.createElement('option');
-    o.value = i; o.textContent = i + '月';
-    $('yearMonth').appendChild(o);
+  // 先更新状态并提前绑定备份恢复入口；即使后续渲染出错，用户仍可尝试恢复数据。
+  status('正在初始化界面（步骤 1/3：绑定操作）…','info');
+  try{
+    for(var i=1; i<=12; i++){
+      var o=document.createElement('option');
+      o.value=i; o.textContent=i+'月';
+      $('yearMonth').appendChild(o);
+    }
+    bindRestoreHandler();
+    bindEvents();
+    reset();
+  }catch(setupError){
+    console.error('初始化绑定失败：',setupError);
+    status('初始化失败：'+(setupError.message||setupError)+'。请打开浏览器控制台查看详情；JSON恢复入口可能仍可使用。','bad');
+    return;
   }
-
-  /* 立即绑定事件 + 重置表单（不等数据加载） */
-  bindEvents();
-  reset();
-
-  /* 立即渲染一次空界面，确保标签页可点 */
-  render();
-  status('正在读取本地数据…', 'info');
-
-  /* 带超时的数据加载 */
-  var LOAD_TIMEOUT = 8000;
-  var loadPromise = load();
-  var timeoutPromise = new Promise(function(_, reject){
-    setTimeout(function(){ reject(new Error('数据读取超时（'+LOAD_TIMEOUT/1000+'秒）')); }, LOAD_TIMEOUT);
+  status('正在读取本地数据（步骤 2/3）…','info');
+  var LOAD_TIMEOUT=8000;
+  var loadPromise;
+  try{ loadPromise=load(); }
+  catch(loadError){ loadPromise=Promise.reject(loadError); }
+  var timeoutPromise=new Promise(function(_,reject){
+    setTimeout(function(){reject(new Error('数据读取超时（'+LOAD_TIMEOUT/1000+'秒）'));},LOAD_TIMEOUT);
   });
-
-  Promise.race([loadPromise, timeoutPromise]).then(function(result){
+  Promise.race([loadPromise,timeoutPromise]).then(function(result){
+    status('正在显示界面（步骤 3/3）…','info');
     if(result.firstRun){
       if(result.storageBlocked){
-        status('⚠️浏览器禁止本地存储，当前仅可查看和导出，刷新后数据不会保留。请在夸克浏览器设置中允许本站数据存储。','bad');
-        storageReady = false;
+        storageReady=false;
+        status('⚠️浏览器禁止本地存储。可尝试在「数据管理」导入JSON备份，但刷新后数据可能不会保留。','bad');
       }else{
-        status('👋 欢迎首次使用！当前无历史数据，请到「周期规则」添加你的第一条任务。数据将自动保存到本地。','good');
+        status('👋 首次使用：当前未发现本地历史数据。若你有备份，请到「数据管理」恢复JSON。','good');
       }
     }else{
-      /* 数据已加载，重新渲染 */
       render();
+      status('读取成功：规则 '+db.rules.length+' 条、记录 '+db.records.length+' 条、冲量任务 '+db.surgeTasks.length+' 条。','good');
     }
   }).catch(function(err){
-    /* 读取失败/超时：不覆盖旧数据，进入安全模式 */
-    console.error('加载失败:', err);
-    db = {version:2, rules:[], records:[], surgeTasks:[], surgeEntries:[]};
-    storageReady = false;
-    render();
-    status('⚠️读取数据时遇到问题：'+err.message+'。已进入安全模式，界面可操作但暂不自动保存。请尽快到「数据管理」导入JSON备份恢复。','bad');
+    console.error('加载失败：',err);
+    // 不写入空数据覆盖浏览器中的旧数据；仅将当前内存切换为可恢复的安全状态。
+    db={version:2,rules:[],records:[],surgeTasks:[],surgeEntries:[]};
+    storageReady=false;
+    try{ render(); }catch(renderError){ console.error('安全界面渲染失败：',renderError); }
+    status('⚠️读取失败：'+(err.message||err)+'。未主动覆盖原存储数据。请到「数据管理」导入JSON备份；若导入成功但无法保存，请另存备份。','bad');
   });
 }
 

@@ -61,7 +61,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 </head>
 <body>
 <header>
-<div class="version-tag">版本：2026-10-28 11:20（北京时间）</div>
+<div class="version-tag">版本：2026-10-28 12:05（北京时间）</div>
 <h1>周期任务与收益管理</h1>
 <p>第二版 · 自动计算未来24小时待办</p>
 </header>
@@ -334,7 +334,7 @@ function save(){
 
 /* ========== 加载（带完善兜底） ========== */
 function load(){
-  var candidates = [], errors = [], localAccessible = false;
+  var candidates = [], errors = [], localAccessible = false, invalidStoredData = false;
 
   /* 1. localStorage */
   try{
@@ -345,11 +345,11 @@ function load(){
       if(x && x.version===2 && Array.isArray(x.rules) && Array.isArray(x.records)){
         candidates.push(Object.assign({}, x, {_source:'localStorage'}));
       }else{
-        errors.push('localStorage中有无法识别的数据');
+        errors.push('localStorage中有无法识别的数据'); invalidStoredData = true;
       }
     }
   }catch(e){
-    errors.push('localStorage读取失败：'+(e.message||'未知错误'));
+    errors.push('localStorage读取失败：'+(e.message||'未知错误')); if(localAccessible) invalidStoredData = true;
   }
 
   /* 2. IndexedDB（带超时） */
@@ -358,7 +358,7 @@ function load(){
       if(x && x.version===2 && Array.isArray(x.rules) && Array.isArray(x.records)){
         candidates.push(Object.assign({}, x, {_source:'IndexedDB'}));
       }else{
-        errors.push('IndexedDB中有无法识别的数据');
+        errors.push('IndexedDB中有无法识别的数据'); invalidStoredData = true;
       }
     }
   }).catch(function(e){
@@ -374,6 +374,12 @@ function load(){
       storageReady = true;
       status('读取成功（'+source+'）：规则 '+db.rules.length+' 条、记录 '+db.records.length+' 条。'+(errors.length?'（提示：'+errors.join('；')+'）':''),'good');
       return {loaded:true, firstRun:false, errors:errors};
+    }
+    /* 存在无法识别的旧数据时，绝不能误判为首次使用并允许空数据覆盖。 */
+    if(invalidStoredData){
+      storageReady = false;
+      db = {version:2, rules:[], records:[], surgeTasks:[], surgeEntries:[]};
+      return {loaded:false, firstRun:false, recoveryNeeded:true, errors:errors};
     }
     /* 没有任何旧数据 */
     if(localAccessible){
@@ -408,7 +414,7 @@ function sunApparentLongitude(ms){
   var omega=(125.04-1934.136*T)*Math.PI/180;
   return normAngle(L0+C-0.00569-0.00478*Math.sin(omega));
 }
-function solarTermDate(year, termAngle){
+function solarTermDateRaw(year, termAngle){
   var start=Date.UTC(year,0,1), finish=Date.UTC(year+1,0,1), step=3*3600000;
   var prevT=start, prevL=sunApparentLongitude(prevT), cumulative=0;
   var initialL=prevL, target=termAngle;
@@ -429,6 +435,17 @@ function solarTermDate(year, termAngle){
     cumulative += delta; prevT=t; prevL=lon;
   }
   return null;
+}
+
+
+// 节气天文计算按“年份+角度”缓存。渲染、切换标签和多个规则共用结果，避免重复扫描全年时间点。
+var solarTermDateCache = Object.create(null);
+function solarTermDate(year, termAngle){
+  var key = year + ':' + termAngle;
+  if(Object.prototype.hasOwnProperty.call(solarTermDateCache, key)) return solarTermDateCache[key];
+  var value = solarTermDateRaw(year, termAngle);
+  solarTermDateCache[key] = value;
+  return value;
 }
 
 /* ========== 周期日期计算 ========== */
@@ -548,7 +565,8 @@ function dueDates(r, from, to){
 /* ========== 生成待办记录 ========== */
 function generate(){
   var now = new Date();
-  var from = plusDays(sod(now), -45);
+  // 新建规则只生成今天及未来45天的待办，不回填过去日期；今天已过计划时间的任务仍可作为逾期待办显示。
+  var from = sod(now);
   var to = plusDays(sod(now), 45);
   var changed = false;
   db.rules.filter(function(r){ return r.active; }).forEach(function(r){
@@ -613,7 +631,6 @@ function recordCard(r){
 }
 
 function renderToday(){
-  if(generate()) save();
   var now = new Date();
   var end = new Date(now.getTime() + 86400000);
   // 待办分类以截止时间为准：截止时间已过才算逾期。
@@ -998,6 +1015,7 @@ function bindRestoreHandler(){
         }
         db=restored;
         storageReady=true;
+        generate();
         render();
         save().then(function(ok){
           button.disabled=false;
@@ -1200,6 +1218,12 @@ function init(){
   });
   Promise.race([loadPromise,timeoutPromise]).then(function(result){
     status('正在显示界面（步骤 3/3）…','info');
+    if(result.recoveryNeeded){
+      // 保留原始浏览器存储，不自动写入空数据库；恢复入口仍可使用。
+      try{ render(); }catch(e){ console.error('恢复界面渲染异常：',e); }
+      status('⚠️发现无法识别的本地存储数据，已暂停自动保存以防覆盖。请在「数据管理」导入完整JSON备份。'+(result.errors&&result.errors.length?'原因：'+result.errors.join('；'):''),'bad');
+      return;
+    }
     if(result.firstRun){
       if(result.storageBlocked){
         storageReady=false;
@@ -1207,14 +1231,16 @@ function init(){
       }else{
         status('👋 首次使用：当前未发现本地历史数据。若你有备份，请到「数据管理」恢复JSON。','good');
       }
-    }else{
-      render();
-      status('读取成功：规则 '+db.rules.length+' 条、记录 '+db.records.length+' 条、冲量任务 '+db.surgeTasks.length+' 条。','good');
     }
+    // 只在加载完成后生成一次任务；render() 不再重复触发天文计算。
+    var generated = false;
+    try{ generated = generate(); }catch(genError){ console.error('任务生成异常：',genError); status('任务生成失败：'+(genError.message||genError)+'。现有数据未清除。','bad'); }
+    try{ render(); }catch(renderError){ console.error('界面渲染异常：',renderError); status('数据已读取，但部分界面渲染失败：'+(renderError.message||renderError),'bad'); }
+    if(generated && storageReady){ save(); }
+    else if(!result.firstRun){ status('读取成功：规则 '+db.rules.length+' 条、记录 '+db.records.length+' 条、冲量任务 '+db.surgeTasks.length+' 条。','good'); }
   }).catch(function(err){
     console.error('加载失败：',err);
-    // 不写入空数据覆盖浏览器中的旧数据；仅将当前内存切换为可恢复的安全状态。
-    db={version:2,rules:[],records:[],surgeTasks:[],surgeEntries:[]};
+    // 不写入空数据覆盖浏览器中的旧数据；暂停自动保存，保留恢复入口。
     storageReady=false;
     try{ render(); }catch(renderError){ console.error('安全界面渲染失败：',renderError); }
     status('⚠️读取失败：'+(err.message||err)+'。未主动覆盖原存储数据。请到「数据管理」导入JSON备份；若导入成功但无法保存，请另存备份。','bad');

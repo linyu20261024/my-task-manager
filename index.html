@@ -61,7 +61,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 </head>
 <body>
 <header>
-<div class="version-tag">版本：2026-10-28 12:10（北京时间）</div>
+<div class="version-tag">版本：2026-10-28 12:25（北京时间）</div>
 <h1>周期任务与收益管理</h1>
 <p>第二版 · 自动计算未来24小时待办</p>
 </header>
@@ -135,7 +135,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 <div class="card">
 <h2>新建冲量任务</h2>
 <p class="muted">独立任务，不按周期自动生成。平台可填写多个，以逗号分隔；账户通过任务名称后缀区分。每日填写当天有效总额（退款请先扣除）。目标按自然月统计；归档只隐藏日常操作，不删除历史金额。</p>
-<form id="surgeForm"><div class="grid">
+<form id="surgeForm"><input type="hidden" id="surgeEditId" value=""><div class="grid">
 <div class="field"><label>任务名称 *</label><input id="surgeName" required maxlength="120" placeholder="例如：月消费冲量 - 主账户"></div>
 <div class="field"><label>平台（多个用逗号分隔）</label><input id="surgePlatforms" placeholder="平台A,平台B"></div>
 <div class="field"><label>目标金额（可选，人民币）</label><input id="surgeTarget" type="number" min="0.01" step="0.01" placeholder="例如：1000000"></div>
@@ -143,7 +143,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 <div class="field"><label>最优完成时间（可选）</label><input id="surgeBestDate" type="datetime-local"></div>
 <div class="field"><label>Deadline（可选）</label><input id="surgeDeadline" type="datetime-local"></div>
 <div class="field full"><label>备注（可选）</label><textarea id="surgeNotes" placeholder="任务说明、消费口径等"></textarea></div>
-</div><div class="actions"><button class="primary" type="submit">创建冲量任务</button></div></form>
+</div><div class="actions"><button class="primary" id="surgeSubmitBtn" type="submit">创建冲量任务</button><button class="secondary hidden" id="surgeCancelEditBtn" type="button">取消编辑</button></div></form>
 </div>
 <div class="card"><h2>进行中的冲量任务</h2><div id="surgeList"></div></div><div class="card"><h2>已归档冲量任务</h2><p class="muted">归档不会删除任务或每日登记；可随时恢复到进行中列表。</p><div id="surgeArchivedList"></div></div>
 </section>
@@ -779,8 +779,8 @@ function renderSurge(){
     var dayInput = archived ? '' :
       '<div class="grid"><div class="field"><label>登记日期</label><input type="date" id="sd_'+esc(t.id)+'" value="'+today+'"></div><div class="field"><label>当天完成总额（人民币）</label><input type="number" min="0" step="0.01" id="sa_'+esc(t.id)+'" placeholder="当天有效消费总额" value="'+(todayEntry?esc(todayEntry.amount):'')+'"></div></div>';
     var buttons = archived
-      ? '<button class="small success" data-act="restoreSurge" data-id="'+esc(t.id)+'">恢复任务</button><button class="small secondary" data-act="surgeHistory" data-id="'+esc(t.id)+'">查看每日记录</button>'
-      : '<button class="small primary" data-act="saveSurgeDay" data-id="'+esc(t.id)+'">保存当天总额</button><button class="small success" data-act="finishSurge" data-id="'+esc(t.id)+'">结束任务并登记收益</button><button class="small secondary" data-act="surgeHistory" data-id="'+esc(t.id)+'">查看每日记录</button><button class="small secondary" data-act="archiveSurge" data-id="'+esc(t.id)+'">归档任务</button>';
+      ? '<button class="small primary" data-act="editSurge" data-id="'+esc(t.id)+'">编辑任务</button><button class="small success" data-act="restoreSurge" data-id="'+esc(t.id)+'">恢复任务</button><button class="small secondary" data-act="surgeHistory" data-id="'+esc(t.id)+'">查看每日记录</button>'
+      : '<button class="small primary" data-act="editSurge" data-id="'+esc(t.id)+'">编辑任务</button><button class="small primary" data-act="saveSurgeDay" data-id="'+esc(t.id)+'">保存当天总额</button><button class="small success" data-act="finishSurge" data-id="'+esc(t.id)+'">结束任务并登记收益</button><button class="small secondary" data-act="surgeHistory" data-id="'+esc(t.id)+'">查看每日记录</button><button class="small secondary" data-act="archiveSurge" data-id="'+esc(t.id)+'">归档任务</button>';
     return '<div class="item"><div class="itemtop"><div class="title">'+esc(t.name)+'<br>'+((t.platforms||[]).map(function(x){return badge(x);}).join(' '))+' '+(archived?badge(t.status==='finished'?'已结束':'已归档','amber'):'')+'</div><b>'+esc(target!=null?money(total,'CNY')+' / '+money(target,'CNY'):'本月 '+money(total,'CNY'))+'</b></div>'
       +'<p><b>本月有效消费：</b>'+esc(money(total,'CNY'))+'　<b>历史累计：</b>'+esc(money(allTotal,'CNY'))+'<br>'+(target>0?'<b>目标进度：</b>'+pct.toFixed(1)+'%　<b>剩余：</b>'+money(Math.max(0,target-total),'CNY')+'<br>':'')
       +(t.bestDate?'<b>最优完成时间：</b>'+esc(t.bestDate)+'　':'')+(t.deadline?'<b>Deadline：</b>'+esc(t.deadline):'')
@@ -793,14 +793,46 @@ function renderSurge(){
   $('surgeList').innerHTML=active.length?active.map(function(t){return taskCard(t,false);}).join(''):'<div class="empty">还没有进行中的冲量任务，请在上方创建。</div>';
   $('surgeArchivedList').innerHTML=archived.length?archived.map(function(t){return taskCard(t,true);}).join(''):'<div class="empty">暂无已归档任务。</div>';
 }
+function editSurgeTask(id){
+  var t=(db.surgeTasks||[]).find(function(x){return x.id===id;}); if(!t)return;
+  $('surgeEditId').value=t.id;
+  $('surgeName').value=t.name||'';
+  $('surgePlatforms').value=(t.platforms||[]).join(', ');
+  $('surgeTarget').value=t.target==null?'':t.target;
+  $('surgeExpected').value=t.expected==null?'':t.expected;
+  $('surgeBestDate').value=t.bestDate||'';
+  $('surgeDeadline').value=t.deadline||'';
+  $('surgeNotes').value=t.notes||'';
+  $('surgeSubmitBtn').textContent='保存任务修改';
+  $('surgeCancelEditBtn').classList.remove('hidden');
+  $('surgeForm').scrollIntoView({behavior:'smooth',block:'start'});
+}
+function cancelSurgeEdit(){
+  $('surgeForm').reset(); $('surgeEditId').value='';
+  $('surgeSubmitBtn').textContent='创建冲量任务';
+  $('surgeCancelEditBtn').classList.add('hidden');
+}
 function createSurgeTask(e){
   e.preventDefault(); var name=$('surgeName').value.trim(); if(!name){alert('请填写任务名称');return;}
   var targetText=$('surgeTarget').value.trim(), target=targetText===''?null:+targetText;
+  var expectedText=$('surgeExpected').value.trim(), expected=expectedText===''?null:+expectedText;
   if(target!==null&&(!isFinite(target)||target<=0)){alert('目标金额如填写，必须大于0；不设置目标请留空。');return;}
+  if(expected!==null&&!isFinite(expected)){alert('预期收益必须是有效数字；不填写请留空。');return;}
   var best=$('surgeBestDate').value, deadline=$('surgeDeadline').value;
   if(best&&deadline&&best>deadline){alert('最优完成时间不能晚于Deadline');return;}
-  db.surgeTasks.push({id:uid(),name:name,platforms:$('surgePlatforms').value.split(/[,，;；]/).map(function(x){return x.trim();}).filter(Boolean),target:target,expected:$('surgeExpected').value.trim()===''?null:+$('surgeExpected').value,actual:null,bestDate:best,deadline:deadline,notes:$('surgeNotes').value.trim(),status:'active',createdAt:nowISO()});
-  $('surgeForm').reset(); renderSurge(); save().then(function(ok){if(!ok)alert('任务暂存于页面，但保存失败，请检查存储。');});
+  var editingId=$('surgeEditId').value;
+  var platforms=$('surgePlatforms').value.split(/[,，;；]/).map(function(x){return x.trim();}).filter(Boolean);
+  if(editingId){
+    var task=(db.surgeTasks||[]).find(function(x){return x.id===editingId;});
+    if(!task){alert('找不到要修改的冲量任务，请刷新后重试。');cancelSurgeEdit();return;}
+    task.name=name; task.platforms=platforms; task.target=target; task.expected=expected;
+    task.bestDate=best; task.deadline=deadline; task.notes=$('surgeNotes').value.trim(); task.updatedAt=nowISO();
+    /* 只更新任务基本信息；实际收益、状态、结束/归档时间和每日登记均保持不变。 */
+    cancelSurgeEdit(); render(); save().then(function(ok){if(ok)alert('冲量任务修改成功；每日登记、实际收益及结束/归档状态均已保留。');else alert('修改已在页面暂存，但保存失败，请立即导出备份并检查浏览器存储。');});
+  }else{
+    db.surgeTasks.push({id:uid(),name:name,platforms:platforms,target:target,expected:expected,actual:null,bestDate:best,deadline:deadline,notes:$('surgeNotes').value.trim(),status:'active',createdAt:nowISO()});
+    cancelSurgeEdit(); renderSurge(); save().then(function(ok){if(!ok)alert('任务暂存于页面，但保存失败，请检查存储。');});
+  }
 }
 function saveSurgeDay(id){
   var date=$('sd_'+id).value, raw=$('sa_'+id).value.trim();
@@ -1048,6 +1080,7 @@ function bindEvents(){
   $('solarClearAll').onclick=function(){Array.prototype.forEach.call(document.querySelectorAll('input[name=solarTerm]'),function(el){el.checked=false;});};
   $('freq').onchange = showFields;
   $('surgeForm').onsubmit = createSurgeTask;
+  $('surgeCancelEditBtn').onclick = cancelSurgeEdit;
   $('resetBtn').onclick = reset;
 
   /* 表单提交 */
@@ -1075,7 +1108,8 @@ function bindEvents(){
     if(!b) return;
     var act = b.dataset.act, id = b.dataset.id;
     var rec = db.records.find(function(x){ return x.id===id; });
-    if(act==='saveSurgeDay') saveSurgeDay(id);
+    if(act==='editSurge') editSurgeTask(id);
+    else if(act==='saveSurgeDay') saveSurgeDay(id);
     else if(act==='surgeHistory'){var sh=$('sh_'+id);if(sh)sh.classList.toggle('hidden');}
     else if(act==='archiveSurge' && confirm('归档该冲量任务？需要登记实际收益；任务和每日登记仍会保留。')){finishSurge(id,true);}
     else if(act==='finishSurge'){if(confirm('结束该冲量任务？结束后将从待办移出，并登记实际收益。'))finishSurge(id,false);}

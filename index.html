@@ -10,7 +10,7 @@
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Microsoft YaHei",sans-serif}
 header{background:linear-gradient(135deg,#1d4ed8,#3b82f6);color:white;padding:12px 15px 16px;position:relative}
-.header-top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:4px}.version-tag{flex:0 0 auto;color:#fff;font-size:11px;background:rgba(15,23,42,0.28);padding:4px 9px;border-radius:6px;line-height:1.4;max-width:100%;white-space:nowrap}
+.header-top{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:nowrap;margin-bottom:4px;min-width:0}.header-top h1{flex:1 1 auto;min-width:0;font-size:clamp(15px,3.5vw,21px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.version-tag{flex:0 0 auto;color:#fff;font-size:clamp(9px,2.2vw,11px);background:rgba(15,23,42,0.28);padding:4px 6px;border-radius:6px;line-height:1.3;white-space:nowrap;max-width:52%;}
 h1{font-size:21px;margin:0 0 4px}
 header p{margin:0;font-size:13px}
 #headerDescription{display:block;max-width:100%;line-height:1.5}
@@ -19,8 +19,10 @@ header p{margin:0;font-size:13px}
 .warn{background:#fff8e6;border-color:#f3d58b;color:#704f00;font-size:13px;cursor:pointer}
 .warn .warn-text{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;overflow:hidden}
 .warn.expanded .warn-text{display:block;overflow:visible}
-.warn .warn-hint{font-size:11px;opacity:.75;white-space:nowrap;margin-left:6px}
+.warn .warn-hint{font-size:11px;opacity:.75;white-space:nowrap;margin-left:6px;display:inline-block}
 .warn.expanded .warn-hint{display:inline-block}
+.warn:not(.expanded) .warn-hint::after{content:""}
+@media(max-width:420px){header{padding:10px 9px 13px}.header-top{gap:5px}.header-top h1{font-size:15px}.version-tag{font-size:9px;padding:3px 5px;max-width:55%}}
 .tabs{display:flex;gap:6px;overflow:auto;margin-bottom:12px}
 .tab,button{border:0;border-radius:9px;padding:10px 12px;font:inherit;font-weight:650;cursor:pointer}
 .tab{background:white;border:1px solid var(--line);white-space:nowrap}
@@ -66,7 +68,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}
 </head>
 <body>
 <header>
-<div class="header-top"><h1>周期任务与收益管理</h1><div class="version-tag">版本：2026-10-29 18:00（北京时间）</div></div>
+<div class="header-top"><h1>周期任务与收益管理</h1><div class="version-tag">版本：2026-10-29 17:55（北京时间）</div></div>
 <p id="headerDescription">第二版 · 自动计算未来24小时待办</p>
 </header>
 <main class="wrap">
@@ -1072,6 +1074,20 @@ function bindRestoreHandler(){
 
 /* ========== 事件绑定（立即绑定，不等数据加载） ========== */
 function bindEvents(){
+  /* 黄色存储说明：点击或键盘操作均可展开/收起，避免提示区无响应 */
+  var storageNotice = $('storageNotice');
+  if(storageNotice){
+    var toggleStorageNotice = function(){
+      var expanded = storageNotice.classList.toggle('expanded');
+      storageNotice.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      var hint = storageNotice.querySelector('.warn-hint');
+      if(hint) hint.textContent = expanded ? '点击收起' : '点击查看全部';
+    };
+    storageNotice.addEventListener('click', toggleStorageNotice);
+    storageNotice.addEventListener('keydown', function(e){
+      if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); toggleStorageNotice(); }
+    });
+  }
   /* 标签切换 */
   document.querySelectorAll('.tab').forEach(function(b){
     b.onclick = function(){
